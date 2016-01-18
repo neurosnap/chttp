@@ -4,6 +4,7 @@
 #include <arpa/inet.h>
 #include <unistd.h>
 #include <time.h>
+#include <string.h>
 
 int httpListen(int port, int max_connections) {
     struct sockaddr_in server;
@@ -58,11 +59,59 @@ void httpHeaderDate(char *date, struct tm *time) {
     );
 }
 
-void httpStatus(int sock, int status) {
-    char http_proto[16];
-    char http_status[15];
-    send(sock, sprintf(http_proto, "HTTP/1.1 %d OK\n", status), 16, 0);
-    send(sock, "Status: %d OK\n", 15, 0);
+char *getStatus(int code) {
+    switch(code) {
+        case 400:
+            return "Bad Request";
+            break;
+
+        case 500:
+            return "Internal Server Error";
+            break;
+
+        case 502:
+            return "Bad Gateway";
+            break;
+
+        case 503:
+            return "Service Unavailable";
+            break;
+
+        case 200:
+        default:
+            return "OK";
+            break;
+    }
+}
+
+void sendStatus(int sock, int code) {
+    char *reason = getStatus(code);
+
+    int reasonLen = strlen(reason);
+    char http_proto[14 + reasonLen];
+    char http_status[13 + reasonLen];
+
+    printf("%d", reasonLen);
+
+    sprintf(http_proto, "HTTP/1.1 %3d %s\n", code, reason);
+    sprintf(http_status, "Status: %3d %s\n", code, reason);
+
+    puts(http_proto);
+    puts(http_status);
+
+    send(sock, http_proto, sizeof(http_proto), 0);
+    send(sock, http_status, sizeof(http_status), 0);
+}
+
+void sendHeaders(int sock) {
+    time_t t = time(NULL);
+    struct tm tm = *gmtime(&t);
+    char date[42];
+    httpHeaderDate(date, &tm);
+
+    send(sock, "Server: chttp\n", 14, 0);
+    send(sock, "Connection: close\n", 18, 0);
+    send(sock, date, strlen(date), 0);
 }
 
 int main(int argc, char *argv[]) {
@@ -73,20 +122,15 @@ int main(int argc, char *argv[]) {
     }
 
     struct sockaddr_in client;
-    time_t t = time(NULL);
     unsigned int client_len;
     int client_socket;
     int max_connections = 1000;
 
     int http_socket = httpListen(atoi(port), max_connections);
 
-    int bufSize = 1024 * 6;
+    int bufSize = 1024 * 4;
     char *buffer = malloc(bufSize);
     for (;;) {
-        struct tm tm = *gmtime(&t);
-        char date[42];
-        httpHeaderDate(date, &tm);
-
         client_len = sizeof(client);
         client_socket = accept(http_socket, (struct sockaddr *) &client, &client_len);
         if (client_socket == -1) {
@@ -99,14 +143,14 @@ int main(int argc, char *argv[]) {
 
         //printf("Message from client:\n%s\n", buffer);
 
-        httpStatus(client_socket, 200);
-        send(client_socket, "Server: chttp\n", 14, 0);
-        send(client_socket, "Connection: close\n", 18, 0);
+        sendHeaders(client_socket);
+        sendStatus(client_socket, 200);
+
         send(client_socket, "Allow: GET\n", 11, 0);
         send(client_socket, "Content-Type: text/html\n", 24, 0);
         send(client_socket, "Content-Length: 3\n", 18, 0);
-        send(client_socket, date, sizeof(date), 0);
-        send(client_socket, "\n\n", 2, 0);
+
+        send(client_socket, "\n", 1, 0);
 
         send(client_socket, "Hi!", 3, 0);
         close(client_socket);
